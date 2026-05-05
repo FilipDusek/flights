@@ -28,6 +28,12 @@ dependencies = [
 local = [
     "playwright"
 ]
+cli = [
+    "typer>=0.9"
+]
+
+[project.scripts]
+flights = "fast_flights.cli:_entrypoint"
 
 [project.urls]
 "Source" = "https://github.com/AWeirdDev/flights"
