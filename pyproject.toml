@@ -24,6 +24,7 @@ dependencies = [
   "selectolax",
   "pyrate-limiter>=3.0",
   "filelock>=3.0",
+  "typing_extensions",
 ]
 
 [project.optional-dependencies]
