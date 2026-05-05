@@ -175,6 +175,10 @@ def main(
     ),
     limit: int = typer.Option(20, "--limit", "-n", min=1, max=200),
     json_output: bool = typer.Option(False, "--json", help="Emit results as JSON instead of a table"),
+    no_rate_limit: bool = typer.Option(
+        False, "--no-rate-limit",
+        help="Disable the SQLite-backed rate limiter",
+    ),
 ) -> None:
     """Search Google Flights and print results.
 
@@ -200,6 +204,7 @@ def main(
             trip=trip, seat=seat,
             adults=adults, children=children,
             currency=currency, sort=sort,
+            rate_limit=not no_rate_limit,
         )
     except Exception as e:
         typer.echo(f"search failed: {type(e).__name__}: {e}", err=True)

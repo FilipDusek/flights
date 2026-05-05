@@ -21,7 +21,9 @@ requires-python = ">=3.10"
 dependencies = [
   "primp",
   "protobuf>=5.27.0",
-  "selectolax"
+  "selectolax",
+  "pyrate-limiter>=3.0",
+  "filelock>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -29,7 +31,7 @@ local = [
     "playwright"
 ]
 cli = [
-    "typer>=0.9"
+    "typer>=0.9",
 ]
 
 [project.scripts]

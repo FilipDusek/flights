@@ -17,6 +17,7 @@ from selectolax.lexbor import LexborHTMLParser
 from .fetcher import URL, _is_consent_page, _submit_consent
 from .parser import _extract_data_array
 from .querying import FlightQuery, Passengers, create_query
+from .ratelimit import BUCKET_NAME, shared as _shared_limiter
 from .schema import FlightSearchResponse
 
 
@@ -99,12 +100,16 @@ def search(
     sort: SortMode = "best",
     client: Optional[Client] = None,
     proxy: Optional[str] = None,
+    rate_limit: bool = True,
+    rate_limiter=None,
 ) -> FlightSearchResponse:
     """Run one search and return a labeled FlightSearchResponse.
 
-    `sort='cheapest'` re-sorts and includes reseller quotes (lower headline
-    prices for the same flight). Pass `client=` to reuse one consent-bypassed
-    client across many searches in a session.
+    `sort='cheapest'` re-sorts and includes reseller quotes.
+
+    `rate_limit=True` (default) acquires a slot from a SQLite-backed shared
+    token bucket before the request. Set False, or pass `FAST_FLIGHTS_NO_RATE_LIMIT=1`,
+    or supply a custom `rate_limiter=` (a pyrate_limiter.Limiter) to override.
     """
     client = client or make_client(proxy=proxy)
     query = create_query(
@@ -122,6 +127,11 @@ def search(
     params = query.params()
     if sort != "best":
         params["tfu"] = _build_sort_tfu(_SORT_VALUES[sort])
+
+    if rate_limit:
+        limiter = rate_limiter or _shared_limiter()
+        if limiter is not None:
+            limiter.try_acquire(BUCKET_NAME)  # blocks until a slot is free
 
     res = client.get(URL, params=params)
     js_node = LexborHTMLParser(res.text).css_first(r"script.ds\:1")
