@@ -8,6 +8,18 @@ from .querying import (
     create_query as create_filter,  # alias
 )
 from .fetcher import get_flights, fetch_flights_html
+from .search import search, make_client, SortMode
+from .schema import (
+    FlightSearchResponse,
+    FlightSection,
+    FlightItinerary,
+    FlightLeg,
+    Carbon,
+    Airport,
+    PriceTracking,
+    FilterMeta,
+)
+from .booking import build_booking_url, build_booking_tfs
 
 __all__ = [
     "FlightQuery",
@@ -18,4 +30,19 @@ __all__ = [
     "get_flights",
     "fetch_flights_html",
     "integrations",
+    # Labeled-response API
+    "search",
+    "make_client",
+    "SortMode",
+    "FlightSearchResponse",
+    "FlightSection",
+    "FlightItinerary",
+    "FlightLeg",
+    "Carbon",
+    "Airport",
+    "PriceTracking",
+    "FilterMeta",
+    # Booking deep-links
+    "build_booking_url",
+    "build_booking_tfs",
 ]
