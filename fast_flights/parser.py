@@ -20,6 +20,44 @@ class MetaList(list[Flights]):
     metadata: JsMetadata
 
 
+def _extract_data_array(js: str) -> str:
+    """Pull the JSON array following `data:` from the AF_initDataCallback wrapper.
+
+    Walks balanced brackets, ignoring brackets inside single- or double-quoted
+    strings, so this works for both the normal response shape and Google's
+    ErrorResponse shape (which has trailing keys like `errorHasStatus: true`
+    that the previous `split('data:')[1].rsplit(',', 1)[0]` broke on).
+    """
+    idx = js.index("data:") + len("data:")
+    while idx < len(js) and js[idx] in " \t\n":
+        idx += 1
+    if idx >= len(js) or js[idx] != "[":
+        raise ValueError(f"expected '[' after 'data:' at offset {idx}")
+    depth = 0
+    quote = None
+    esc = False
+    start = idx
+    while idx < len(js):
+        c = js[idx]
+        if quote is not None:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == quote:
+                quote = None
+        elif c == "'" or c == '"':
+            quote = c
+        elif c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                return js[start:idx + 1]
+        idx += 1
+    raise ValueError("unbalanced brackets in script.ds:1 data array")
+
+
 def parse(html: str) -> MetaList:
     parser = LexborHTMLParser(html)
 
@@ -30,8 +68,7 @@ def parse(html: str) -> MetaList:
 
 # Data discovery by @kftang, huge shout out!
 def parse_js(js: str):
-    data = js.split("data:", 1)[1].rsplit(",", 1)[0]
-    print(data)
+    data = _extract_data_array(js)
 
     payload = json.loads(data)
 
