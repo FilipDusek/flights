@@ -5,9 +5,6 @@ Usage:
     flights JFK LAX 15.12.2026 --return-date 22.12.2026 --adults 2
     flights NRT SIN 2026-07-15 --sort cheapest --limit 5
     flights SFO LHR 2026-09-10 --seat business --json
-
-Date input: YYYY-MM-DD (ISO) or D.M.YYYY (CZ); aligned across the
-companion idos and cd-trains CLIs.
 """
 from __future__ import annotations
 
@@ -32,10 +29,8 @@ from .schema import FlightItinerary
 from .search import search as do_search
 
 
-# Canonical date input parsing, mirrored verbatim across idos-py, cd-trains,
-# and fast-flights so the user can pass the same strings to all three CLIs.
-# We deliberately don't pull in dateparser/dateutil — they're either slow
-# (dateparser cold start ~150ms) or get ISO/DMY swapped.
+# Date input parsing — accept both ISO and CZ formats. Hand-rolled to avoid
+# dateparser/dateutil's cold-start cost and ISO-vs-DMY ambiguity.
 def _parse_date(s: str) -> _dt.date:
     """Accepts YYYY-MM-DD (ISO) or D[D].M[M].YYYY (CZ). Returns a date."""
     s = s.strip()
@@ -61,31 +56,47 @@ def _fmt_duration(minutes: Optional[int]) -> str:
 
 
 def _render(it: FlightItinerary, currency: str, booking_url: Optional[str]) -> dict:
-    """Flatten an itinerary into a dict suitable for table or JSON output."""
+    """Flatten an itinerary into the common dict shape used by the table /
+    JSON output."""
     legs = [
         {
-            "carrier": l.carrier_code + l.flight_number,
+            "name": l.carrier_code + l.flight_number,
+            "number": l.flight_number,
+            "carrier": l.carrier_code,
             "from": l.from_code,
             "to": l.to_code,
-            "departure": f"{l.departure.date} {l.departure.time.strftime('%H:%M')}",
-            "arrival": f"{l.arrival.date} {l.arrival.time.strftime('%H:%M')}",
+            "dep_time": l.departure.time.strftime("%H:%M"),
+            "arr_time": l.arrival.time.strftime("%H:%M"),
+            "dep_date": str(l.departure.date),
+            "arr_date": str(l.arrival.date),
             "duration_min": l.duration_min,
             "plane": l.plane_type,
             "operated_by": l.operated_by,
         }
         for l in it.legs
     ]
+    first, last = it.legs[0], it.legs[-1]
+    departure = f"{first.departure.date} {first.departure.time.strftime('%H:%M')}"
+    arrival = f"{last.arrival.date} {last.arrival.time.strftime('%H:%M')}"
+    duration = _fmt_duration(it.total_duration_min)
+    price_label = f"{it.price} {currency}" if it.price else "n/a"
     return {
-        "price": it.price,
-        "currency": currency,
+        "from": first.from_code,
+        "to": last.to_code,
+        "departure": departure,
+        "arrival": arrival,
+        "duration": duration,
+        "transfers": it.stops,
+        "price": price_label,
+        "share_url": booking_url,
+        "legs": legs,
+        # Google-Flights-specific extras (kept for power-users):
         "airlines": it.airlines,
-        "stops": it.stops,
-        "total_duration_min": it.total_duration_min,
+        "currency": currency,
         "arrival_offset_days": it.arrival_offset_days,
         "carbon_g": it.carbon.emission_g,
         "carbon_delta_pct": it.carbon.delta_pct,
-        "legs": legs,
-        "booking_url": booking_url,
+        "total_duration_min": it.total_duration_min,
     }
 
 
@@ -99,14 +110,14 @@ def _stops_cell(stops: int) -> str:
 
 def _print_table(
     items: list[dict],
-    currency: str,
     *,
     route_label: str,
     date_label: str,
     pax_label: str,
     sort: str,
+    search_url: str,
 ) -> None:
-    """Pretty table with clickable booking links via OSC 8 hyperlinks.
+    """Pretty table with clickable booking + Search links via OSC 8 hyperlinks.
 
     Rich emits OSC 8 escapes that modern terminals (iTerm2, recent
     Terminal.app, Alacritty, Kitty, WezTerm, VS Code, GNOME Terminal) render
@@ -119,7 +130,6 @@ def _print_table(
 
     console = Console()
 
-    # Header line
     sort_note = "[dim](best)[/dim]" if sort == "best" else "[cyan](cheapest — incl. resellers)[/cyan]"
     console.print(
         f"\n[bold]{route_label}[/bold]  [dim]·[/dim]  {date_label}  "
@@ -128,50 +138,60 @@ def _print_table(
 
     if not items:
         console.print("[dim]no flights returned[/dim]\n")
+        console.print(f"[dim][link={search_url}]Search ↗[/link][/dim]\n")
         return
 
     table = Table(box=box.SIMPLE_HEAVY, header_style="bold", padding=(0, 1), expand=False)
     table.add_column("price", justify="right", style="bold green", no_wrap=True)
-    table.add_column("type", no_wrap=True)
-    table.add_column("duration", justify="right", no_wrap=True)
-    table.add_column("route", no_wrap=True)
-    table.add_column("times", style="dim", no_wrap=True)
-    table.add_column("airlines", overflow="ellipsis")
+    table.add_column("dep", no_wrap=True)
+    table.add_column("arr", no_wrap=True)
+    table.add_column("duration", no_wrap=True)
+    table.add_column("transfers", justify="right", no_wrap=True)
+    table.add_column("legs", overflow="ellipsis")
 
     for it in items:
         legs = it["legs"]
-        route = " → ".join([legs[0]["from"]] + [l["to"] for l in legs])
-        airlines = ", ".join(it["airlines"])
-        dep_arr = f"{legs[0]['departure'][11:]}–{legs[-1]['arrival'][11:]}"
-        if it["arrival_offset_days"]:
-            dep_arr += f" [yellow]+{it['arrival_offset_days']}d[/yellow]"
+        # Just the time portion of "YYYY-MM-DD HH:MM"
+        dep_time = it["departure"].split(" ", 1)[-1] if it["departure"] else ""
+        arr_time = it["arrival"].split(" ", 1)[-1] if it["arrival"] else ""
+        if it.get("arrival_offset_days"):
+            arr_time += f" [yellow]+{it['arrival_offset_days']}d[/yellow]"
 
-        price_label = f"{it['price'] or '?'} {currency}"
-        url = it.get("booking_url")
-        price_cell = f"[link={url}]{price_label}[/link]" if url else price_label
+        leg_names = " → ".join(l["name"] for l in legs)
+        url = it.get("share_url")
+        if url:
+            leg_names = f"[link={url}]{leg_names}[/link]"
 
-        # Append a dim "operated by" line under the airline names when codeshares
-        # have a different operating carrier than the marketing one.
+        # Append "op. XX" under the airline name when codeshare's operating
+        # carrier differs from the marketing one.
         op_notes = sorted({l["operated_by"] for l in legs if l.get("operated_by")})
         if op_notes:
-            airlines += f"\n[dim]op. {', '.join(op_notes)}[/dim]"
+            leg_names += f"\n[dim]op. {', '.join(op_notes)}[/dim]"
 
         table.add_row(
-            price_cell,
-            _stops_cell(it["stops"]),
-            _fmt_duration(it["total_duration_min"]),
-            route,
-            dep_arr,
-            airlines,
+            it["price"],
+            dep_time,
+            arr_time,
+            it["duration"],
+            _stops_cell(it["transfers"]),
+            leg_names,
         )
 
     console.print(table)
-    if any(it.get("booking_url") for it in items):
-        console.print(
-            f"[dim]· {len(items)} result{'s' if len(items) != 1 else ''}. "
-            f"Click any price to open the booking page. "
-            f"For terminals without hyperlink support, use --json.[/dim]\n"
-        )
+    console.print(
+        f"[dim]· {len(items)} result{'s' if len(items) != 1 else ''} · "
+        f"click legs for booking · --json for machine-readable · "
+        f"[link={search_url}]Search ↗[/link][/dim]\n"
+    )
+
+
+def _build_search_url(from_airport: str, to_airport: str,
+                      date_iso: str, return_date_iso: Optional[str]) -> str:
+    """Canonical Google Flights search URL for the same query."""
+    leg = f"{from_airport.upper()}.{to_airport.upper()}.{date_iso}"
+    if return_date_iso:
+        leg += f"*{to_airport.upper()}.{from_airport.upper()}.{return_date_iso}"
+    return f"https://www.google.com/travel/flights?q=flights+to+{to_airport.upper()}+from+{from_airport.upper()}+on+{date_iso}"
 
 
 # ──────────────────── command ────────────────────
@@ -180,8 +200,8 @@ def _print_table(
 def main(
     from_airport: str = typer.Argument(..., metavar="FROM", help="3-letter origin IATA code, e.g. JFK"),
     to_airport: str = typer.Argument(..., metavar="TO", help="3-letter destination IATA code, e.g. LAX"),
-    date: str = typer.Argument(..., metavar="DATE",
-        help="Departure date in YYYY-MM-DD or D.M.YYYY"),
+    date: Optional[str] = typer.Argument(None, metavar="[DATE]",
+        help="Departure date YYYY-MM-DD or D.M.YYYY (defaults to today)"),
     return_date: Optional[str] = typer.Option(
         None, "--return-date", "-r",
         help="Return date for round-trip in YYYY-MM-DD or D.M.YYYY",
@@ -197,7 +217,7 @@ def main(
         "best", "--sort",
         help="best (default; airline-direct fares) | cheapest (includes reseller quotes — Kiwi, Gotogate, etc.)",
     ),
-    limit: int = typer.Option(20, "--limit", "-n", min=1, max=200),
+    limit: int = typer.Option(10, "--limit", "-n", min=1, max=50),
     json_output: bool = typer.Option(False, "--json", help="Emit results as JSON instead of a table"),
     no_rate_limit: bool = typer.Option(
         False, "--no-rate-limit",
@@ -217,7 +237,7 @@ def main(
         raise typer.Exit(2)
 
     try:
-        date_iso = _parse_date(date).isoformat()
+        date_iso = (_parse_date(date) if date else _dt.date.today()).isoformat()
         return_date_iso = _parse_date(return_date).isoformat() if return_date else None
     except ValueError as e:
         typer.echo(f"error: {e}", err=True)
@@ -228,6 +248,8 @@ def main(
     if return_date_iso:
         queries.append(FlightQuery(date=return_date_iso, from_airport=to_airport.upper(), to_airport=from_airport.upper()))
         trip = "round-trip"
+
+    search_url = _build_search_url(from_airport, to_airport, date_iso, return_date_iso)
 
     try:
         resp = do_search(
@@ -257,15 +279,31 @@ def main(
         rendered.append(_render(it, currency, url))
 
     if json_output:
-        typer.echo(_json.dumps(rendered, indent=2, default=str))
+        typer.echo(_json.dumps(
+            {
+                "query": {
+                    "from": from_airport.upper(),
+                    "to": to_airport.upper(),
+                    "date": date_iso,
+                    "return_date": return_date_iso,
+                    "seat": seat,
+                    "adults": adults,
+                    "children": children,
+                    "currency": currency,
+                    "sort": sort,
+                    "url": search_url,
+                },
+                "results": rendered,
+            },
+            indent=2, default=str,
+        ))
     else:
-        # Build the labels for the pretty header
         route_label = f"{from_airport.upper()} → {to_airport.upper()}"
-        if return_date:
+        if return_date_iso:
             route_label += f" → {from_airport.upper()}"
-            date_label = f"{date} → {return_date}"
+            date_label = f"{date_iso} → {return_date_iso}"
         else:
-            date_label = date
+            date_label = date_iso
         pax_parts = [f"{adults} adult{'s' if adults != 1 else ''}"]
         if children:
             pax_parts.append(f"{children} child{'ren' if children != 1 else ''}")
@@ -273,11 +311,12 @@ def main(
         pax_label = ", ".join(pax_parts)
 
         _print_table(
-            rendered, currency,
+            rendered,
             route_label=route_label,
             date_label=date_label,
             pax_label=pax_label,
             sort=sort,
+            search_url=search_url,
         )
 
 
