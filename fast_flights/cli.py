@@ -2,13 +2,18 @@
 
 Usage:
     flights JFK LAX 2026-12-15
-    flights JFK LAX 2026-12-15 --return-date 2026-12-22 --adults 2
+    flights JFK LAX 15.12.2026 --return-date 22.12.2026 --adults 2
     flights NRT SIN 2026-07-15 --sort cheapest --limit 5
     flights SFO LHR 2026-09-10 --seat business --json
+
+Date input: YYYY-MM-DD (ISO) or D.M.YYYY (CZ); aligned across the
+companion idos and cd-trains CLIs.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json as _json
+import re
 import sys
 from typing import Optional
 
@@ -25,6 +30,24 @@ from .booking import build_booking_url
 from .querying import FlightQuery
 from .schema import FlightItinerary
 from .search import search as do_search
+
+
+# Canonical date input parsing, mirrored verbatim across idos-py, cd-trains,
+# and fast-flights so the user can pass the same strings to all three CLIs.
+# We deliberately don't pull in dateparser/dateutil — they're either slow
+# (dateparser cold start ~150ms) or get ISO/DMY swapped.
+def _parse_date(s: str) -> _dt.date:
+    """Accepts YYYY-MM-DD (ISO) or D[D].M[M].YYYY (CZ). Returns a date."""
+    s = s.strip()
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if m:
+        y, mo, d = (int(g) for g in m.groups())
+        return _dt.date(y, mo, d)
+    m = re.fullmatch(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", s)
+    if m:
+        d, mo, y = (int(g) for g in m.groups())
+        return _dt.date(y, mo, d)
+    raise ValueError(f"date must be YYYY-MM-DD or D.M.YYYY (got {s!r})")
 
 
 # ──────────────────── helpers ────────────────────
@@ -157,10 +180,11 @@ def _print_table(
 def main(
     from_airport: str = typer.Argument(..., metavar="FROM", help="3-letter origin IATA code, e.g. JFK"),
     to_airport: str = typer.Argument(..., metavar="TO", help="3-letter destination IATA code, e.g. LAX"),
-    date: str = typer.Argument(..., metavar="DATE", help="Departure date in YYYY-MM-DD"),
+    date: str = typer.Argument(..., metavar="DATE",
+        help="Departure date in YYYY-MM-DD or D.M.YYYY"),
     return_date: Optional[str] = typer.Option(
         None, "--return-date", "-r",
-        help="Return date for round-trip in YYYY-MM-DD",
+        help="Return date for round-trip in YYYY-MM-DD or D.M.YYYY",
     ),
     seat: str = typer.Option(
         "economy", "--seat", "-s",
@@ -192,10 +216,17 @@ def main(
         typer.echo("error: --sort must be 'best' or 'cheapest'", err=True)
         raise typer.Exit(2)
 
-    queries = [FlightQuery(date=date, from_airport=from_airport.upper(), to_airport=to_airport.upper())]
+    try:
+        date_iso = _parse_date(date).isoformat()
+        return_date_iso = _parse_date(return_date).isoformat() if return_date else None
+    except ValueError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(2)
+
+    queries = [FlightQuery(date=date_iso, from_airport=from_airport.upper(), to_airport=to_airport.upper())]
     trip = "one-way"
-    if return_date:
-        queries.append(FlightQuery(date=return_date, from_airport=to_airport.upper(), to_airport=from_airport.upper()))
+    if return_date_iso:
+        queries.append(FlightQuery(date=return_date_iso, from_airport=to_airport.upper(), to_airport=from_airport.upper()))
         trip = "round-trip"
 
     try:
