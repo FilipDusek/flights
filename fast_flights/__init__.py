@@ -20,6 +20,14 @@ from .schema import (
     FilterMeta,
 )
 from .booking import build_booking_url, build_booking_tfs
+from .explore import (
+    explore,
+    resolve_place,
+    ExplorePlace,
+    ExploreDestination,
+    ExploreResult,
+    ExploreError,
+)
 
 __all__ = [
     "FlightQuery",
@@ -45,4 +53,11 @@ __all__ = [
     # Booking deep-links
     "build_booking_url",
     "build_booking_tfs",
+    # Explore (destination inspiration)
+    "explore",
+    "resolve_place",
+    "ExplorePlace",
+    "ExploreDestination",
+    "ExploreResult",
+    "ExploreError",
 ]

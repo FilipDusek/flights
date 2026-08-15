@@ -38,6 +38,41 @@ query = create_query(
 res = get_flights(query)
 ```
 
+## Explore (destination inspiration)
+
+The Google Flights **Explore** map ("from Copenhagen to anywhere, 1-week trip
+in the next 6 months") as structured data — same internal RPC the map uses,
+no browser needed:
+
+```python
+from fast_flights import explore
+
+result = explore("CPH", "Europe", month=9, trip_length="weekend", max_price=1500)
+for d in result.destinations[:5]:
+    print(d.name, d.price, d.currency, d.depart_date, d.return_date, d.flights_url)
+print(result.explore_url)  # reopen this exact search in the browser
+```
+
+Or from the CLI (installed as a second console script, `flights-explore`):
+
+```console
+$ flights-explore CPH                              # anywhere, next 6 months, 1 week
+$ flights-explore Copenhagen Europe -m sep -l weekend
+$ flights-explore CPH Thailand -d 2026-11-10 -r 2026-11-24 --currency EUR
+$ flights-explore CPH --max-price 1500 --stops 0 --airlines STAR_ALLIANCE --json
+$ flights-explore CPH --bounds 70,25,54,4          # arbitrary geographic box
+```
+
+Origins and destinations are freeform (IATA codes, cities, countries, regions,
+continents — resolved through Google's own autocomplete). Each result carries
+the cheapest found itinerary (price, carrier, stops, duration, dates), plus a
+deep link to the regular flight search for those exact dates; the query itself
+gets an `explore_url` that reopens the same search on the map. Filters: specific
+dates or flexible (month + weekend/week/two-weeks), max stops, airlines and
+alliances, price cap, carry-on bags, cabin, passengers, one-way, flights-only,
+and a lat/lng bounding box. Hotel prices shown in the web UI are not included
+(separate RPC).
+
 ## Integrations
 If you'd like, you can use integrations.
 
