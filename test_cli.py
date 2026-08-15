@@ -3,11 +3,14 @@
 These tests don't hit the network; they verify that the CLI surface
 (argument validation, help text, exit codes) behaves correctly.
 """
+from urllib.parse import parse_qs, urlparse
+
 import typer
 from typer.testing import CliRunner
 
 from fast_flights.booking import build_booking_tfs
-from fast_flights.cli import main
+from fast_flights.cli import _build_search_url, _select_result_url, main
+from fast_flights.querying import FlightQuery, Passengers, create_query
 
 
 # Wrap the single-command entrypoint into a Typer app for testing.
@@ -90,3 +93,36 @@ def test_build_booking_tfs_passenger_count_changes_output():
     one_bytes = base64.urlsafe_b64decode(one + "=" * (-len(one) % 4))
     two_bytes = base64.urlsafe_b64decode(two + "=" * (-len(two) % 4))
     assert len(two_bytes) > len(one_bytes)
+
+
+def test_roundtrip_search_url_preserves_both_dates():
+    url = _build_search_url(
+        "CPH", "PRG", "2026-10-24", "2026-10-27",
+        seat="economy", adults=1, children=0, currency="DKK", language="en",
+    )
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+    expected = create_query(
+        flights=[
+            FlightQuery(date="2026-10-24", from_airport="CPH", to_airport="PRG"),
+            FlightQuery(date="2026-10-27", from_airport="PRG", to_airport="CPH"),
+        ],
+        trip="round-trip",
+        seat="economy",
+        passengers=Passengers(adults=1),
+        currency="DKK",
+        language="en",
+    ).params()
+
+    assert parsed.path == "/travel/flights/search"
+    assert params["tfs"] == [expected["tfs"]]
+    assert params["curr"] == ["DKK"]
+    assert params["hl"] == ["en"]
+
+
+def test_roundtrip_result_uses_complete_search_url_not_outbound_only_booking_url():
+    search_url = "https://www.google.com/travel/flights/search?tfs=complete-roundtrip"
+    booking_url = "https://www.google.com/travel/flights/booking?tfs=outbound-only"
+
+    assert _select_result_url("round-trip", booking_url, search_url) == search_url
+    assert _select_result_url("one-way", booking_url, search_url) == booking_url

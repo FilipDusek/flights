@@ -13,6 +13,7 @@ import json as _json
 import re
 import sys
 from typing import Optional
+from urllib.parse import urlencode
 
 try:
     import typer
@@ -24,9 +25,10 @@ except ImportError:
     raise SystemExit(1)
 
 from .booking import build_booking_url
-from .querying import FlightQuery
+from .querying import FlightQuery, Passengers, create_query
 from .schema import FlightItinerary
 from .search import search as do_search
+from .types import SeatType
 
 
 # Date input parsing — accept both ISO and CZ formats. Hand-rolled to avoid
@@ -185,13 +187,57 @@ def _print_table(
     )
 
 
-def _build_search_url(from_airport: str, to_airport: str,
-                      date_iso: str, return_date_iso: Optional[str]) -> str:
-    """Canonical Google Flights search URL for the same query."""
-    leg = f"{from_airport.upper()}.{to_airport.upper()}.{date_iso}"
+def _build_search_url(
+    from_airport: str,
+    to_airport: str,
+    date_iso: str,
+    return_date_iso: Optional[str],
+    *,
+    seat: SeatType = "economy",
+    adults: int = 1,
+    children: int = 0,
+    currency: str = "USD",
+    language: str = "en",
+) -> str:
+    """Canonical Google Flights URL preserving the complete CLI query.
+
+    Natural-language ``q=`` URLs do not reliably retain return dates.  Reuse
+    the same protobuf query sent to Google so route, dates, cabin and passenger
+    counts survive when the link is opened.
+    """
+    flights = [
+        FlightQuery(
+            date=date_iso,
+            from_airport=from_airport.upper(),
+            to_airport=to_airport.upper(),
+        )
+    ]
+    trip = "one-way"
     if return_date_iso:
-        leg += f"*{to_airport.upper()}.{from_airport.upper()}.{return_date_iso}"
-    return f"https://www.google.com/travel/flights?q=flights+to+{to_airport.upper()}+from+{from_airport.upper()}+on+{date_iso}"
+        flights.append(
+            FlightQuery(
+                date=return_date_iso,
+                from_airport=to_airport.upper(),
+                to_airport=from_airport.upper(),
+            )
+        )
+        trip = "round-trip"
+    params = create_query(
+        flights=flights,
+        trip=trip,
+        seat=seat,
+        passengers=Passengers(adults=adults, children=children),
+        language=language,
+        currency=currency,
+    ).params()
+    return "https://www.google.com/travel/flights/search?" + urlencode(params)
+
+
+def _select_result_url(trip: str, booking_url: Optional[str], search_url: str) -> str:
+    """Use a complete search link when a booking link lacks the return leg."""
+    if trip == "round-trip":
+        return search_url
+    return booking_url or search_url
 
 
 # ──────────────────── command ────────────────────
@@ -249,7 +295,10 @@ def main(
         queries.append(FlightQuery(date=return_date_iso, from_airport=to_airport.upper(), to_airport=from_airport.upper()))
         trip = "round-trip"
 
-    search_url = _build_search_url(from_airport, to_airport, date_iso, return_date_iso)
+    search_url = _build_search_url(
+        from_airport, to_airport, date_iso, return_date_iso,
+        seat=seat, adults=adults, children=children, currency=currency,
+    )
 
     try:
         resp = do_search(
@@ -276,7 +325,7 @@ def main(
             trip=trip if trip == "round-trip" else "one-way",
             currency=currency,
         )
-        rendered.append(_render(it, currency, url))
+        rendered.append(_render(it, currency, _select_result_url(trip, url, search_url)))
 
     if json_output:
         typer.echo(_json.dumps(
